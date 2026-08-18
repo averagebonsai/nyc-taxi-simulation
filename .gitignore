@@ -1,0 +1,12 @@
+*.env
+*.venv
+*.parquet
+*.xlsx
+*.csv
+*__pycache__
+*.json
+*.npz
+*.pkl
+*.png
+*.jpeg
+experiments/
