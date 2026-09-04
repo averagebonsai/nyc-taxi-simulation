@@ -300,7 +300,13 @@ def load_simulation_assets(data_dir: Path) -> SimulationAssets:
         index = zone_to_index.get(int(row["PULocationID"]))
         if index is not None:
             value = row.get("latent_poisson")
-            demand[index, int(row["day_of_week"]), int(row["request_hour"])] = 0.0 if value is None else float(value)
+            # Some prepared rows have no historical acceptance estimate.  The
+            # data-preparation workflow's intended fallback is observed demand.
+            if value is None or not np.isfinite(float(value)):
+                value = row.get("historical_poisson", 0.0)
+            demand[index, int(row["day_of_week"]), int(row["request_hour"])] = (
+                float(value) if value is not None and np.isfinite(float(value)) else 0.0
+            )
     regression = LinearRegression().fit(graph["baseline_distance"].to_numpy().reshape(-1, 1), graph["baseline_fare"].to_numpy())
     fare_model = FareModel(float(regression.coef_[0]), float(regression.intercept_))
     fallback_fare = fare_model.intercept + 5.0 * fare_model.price_per_mile

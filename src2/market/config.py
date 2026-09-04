@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
@@ -10,8 +10,7 @@ import numpy as np
 
 # This is the single source of truth for pricing actions.  Algorithms only
 # choose integer indexes; the environment always receives the actual values.
-PRICE_ACTIONS: tuple[float, ...] = (1.0, 1.2, 1.5, 1.8, 2.0)
-
+PRICE_ACTIONS: tuple[float, ...] = (1.0, 1.2, 1.5, 1.8, 2.0, 2.2, 2.5)
 
 @dataclass(frozen=True)
 class SimulationConfig:
@@ -52,31 +51,6 @@ class SimulationConfig:
         # Retain the old project's convention: equal fleets, with any remainder
         # intentionally not assigned rather than hidden in an arbitrary firm.
         return np.full(n_firms, total // n_firms, dtype=int)
-
-
-@dataclass(frozen=True)
-class LearningConfig:
-    """Hyperparameters used by the Q-learning and EXP3 runners."""
-
-    episodes: int = 100
-    discount: float = 0.95
-    q_learning_rate: float = 0.2
-    q_epsilon: float = 0.1
-    exp3_exploration: float = 0.1
-    exp3_learning_rate: float = 0.1
-    reward_normalizer: float = 270.0
-    seed: int = 42
-
-    def validate(self) -> None:
-        if self.episodes < 1:
-            raise ValueError("episodes must be positive.")
-        if not 0 <= self.discount <= 1 or not 0 <= self.q_epsilon <= 1:
-            raise ValueError("discount and q_epsilon must be in [0, 1].")
-        if not 0 <= self.exp3_exploration <= 1:
-            raise ValueError("exp3_exploration must be in [0, 1].")
-        if self.q_learning_rate <= 0 or self.exp3_learning_rate <= 0 or self.reward_normalizer <= 0:
-            raise ValueError("Learning rates and reward_normalizer must be positive.")
-
 
 def parse_fleet_sizes(values: Sequence[int]) -> tuple[int, ...]:
     """Convert CLI fleet arguments into the immutable configuration form."""

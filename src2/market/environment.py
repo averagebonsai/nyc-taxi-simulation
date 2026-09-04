@@ -35,6 +35,11 @@ class TaxiMarketEnv:
     def n_zones(self) -> int:
         return self.assets.n_zones
 
+    @property
+    def current_time(self) -> tuple[int, int]:
+        """Expose the current day/hour as policy context without changing state."""
+        return self._current_time()
+
     def reset(self) -> np.ndarray:
         """Start a new episode with each firm's fleet uniformly distributed."""
         self.current_step = 0
