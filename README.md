@@ -114,5 +114,6 @@ python -m pytest tests
 - Results are simulations for research and education; they are not production pricing recommendations.
 
 ## License and attribution
+This project was developed as part of BlendED's AI+X PBL programme. 
 
-This project was developed as part of BlendED's AI+X PBL programme. Add the project's intended license and data-use attribution here before public distribution.
+Part of the code in @src_calvano/ was copied from the Algorithmic-Collusion-Replication Repo, at https://github.com/matteocourthoud/Algorithmic-Collusion-Replication/. All credits for those code files go to him, and to my best knowledge are under the MIT license, these files copied here are for reference. 

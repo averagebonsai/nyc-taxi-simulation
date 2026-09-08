@@ -14,7 +14,8 @@
 9. Multi-seed aggregation or confidence intervals missing. Run over different seeds. And report a range/confidence interval. 
 10. Baseline training starts from same day/hour pattern. Also agents don't observe hour/day -- to be incorporated in algo. 
 11. Fare matrix contains a negative fare. 
-
+12. Do we need to include memory? Each agent having a certain amount of memory. e.g Q-learning: Only able to see the results of the last k episodes, instead of being able to view the entire Q-table? [Note: Underlying assumption is perfect memory, which is quite common -- Amazon allows checking of current and past prices via API, Uber has full oversight on its dynamic prices, etc.]
+--- Memory is important, because the agents need to "know" that other agents deviated from the strategy. |S| = m^(nk), m = no. of actions, n = no of firms, k = number of periods. 
 
 
 Variables that should be taken into account by the algo: 
@@ -22,3 +23,12 @@ Variables that should be taken into account by the algo:
 - Supply 
 - Location 
 - Time 
+
+Calvano et al baseline: 
+- General tabular Q-learning
+- Repeated price competition with bounded price-history memory. 
+
+
+Hypotheses to test: 
+- Grounded in a new environment -- Does Calvano's results change significantly? 
+- Algorithm choice -- with bounded memory and fixed parameters, but different algorithms, does collusion change? 
