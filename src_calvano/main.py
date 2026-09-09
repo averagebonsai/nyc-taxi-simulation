@@ -9,8 +9,8 @@ Code
     myself: https://matteocourthoud.github.io/
 """
 
-from input.init import model
-from input.qlearning import simulate_game
+from init import model
+from qlearning import simulate_game
 
 # Init algorithm
 game = model()
