@@ -248,8 +248,8 @@ def write_training_visit_log(
     state_counts = np.asarray(state_visits, dtype=np.int64)
     if action_counts.ndim != 2:
         raise ValueError("The training visit log requires two agents")
-    if memory < 1:
-        raise ValueError("The training visit log requires at least one period of memory")
+    if memory < 0:
+        raise ValueError("The training visit log cannot use negative memory")
     if memory == 1 and state_counts.size != action_counts.size:
         raise ValueError("One-period state visits must have one entry per joint action")
     target = Path(path)
@@ -283,8 +283,8 @@ def write_state_visit_log(
     State columns are ordered newest to oldest. With two agents and memory two,
     the file has ``15**4`` rows describing ``(a1_t-1, a2_t-1, a1_t-2, a2_t-2)``.
     """
-    if num_agents != 2 or num_prices < 2 or memory < 1:
-        raise ValueError("State visit logging currently supports two agents and positive memory")
+    if num_agents != 2 or num_prices < 2 or memory < 0:
+        raise ValueError("State visit logging currently supports two agents and non-negative memory")
     counts = np.asarray(state_visits, dtype=np.int64)
     state_width = num_agents * memory
     expected_states = num_prices**state_width

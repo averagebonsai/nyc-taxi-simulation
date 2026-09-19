@@ -5,3 +5,4 @@ python-dotenv
 polars
 scikit-learn
 matplotlib
+pytest

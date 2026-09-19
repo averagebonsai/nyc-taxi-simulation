@@ -11,7 +11,7 @@ import numpy as np
 PACKAGE = Path(__file__).parents[1] / "calvano-sourcecode"
 sys.path.insert(0, str(PACKAGE))
 
-from config import BatchConfig, ExperimentConfig
+from config import BatchConfig, ExperimentConfig, read_input
 from model import BaselineGame
 from reporting import (
     write_eqm_input,
@@ -113,3 +113,15 @@ def test_two_period_memory_encodes_and_logs_four_price_state(tmp_path: Path) -> 
     assert np.allclose(loaded_summary["AggrDevPriceShock"], summary["AggrDevPriceShock"])
     assert np.array_equal(resumed_sessions[0].policy, sessions[0].policy)
     assert np.allclose(resumed_summary["AggrDevPriceShock"], summary["AggrDevPriceShock"])
+
+
+def test_zero_period_input_has_one_stateless_state_and_visit_log(tmp_path: Path) -> None:
+    batch, experiments = read_input(PACKAGE / "A_InputParametersZeroPeriod.txt")
+    game = BaselineGame(batch, experiments[0])
+    output = write_state_visit_log(
+        tmp_path / "A_trainingStateVisits.csv", np.array([12]), num_agents=2, num_prices=10, memory=0
+    )
+    assert game.num_states == 1
+    assert game.state_index(()) == 0
+    assert game.next_state((), np.array([2, 3])) == ()
+    assert output.read_text(encoding="utf-8").splitlines() == ["state_visits", "12"]
