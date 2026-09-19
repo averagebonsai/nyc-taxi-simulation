@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+
+# Set before config imports NumPy so every ProcessPool worker remains a
+# one-core session even when a cloud image defaults BLAS to many threads.
+for _thread_variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ[_thread_variable] = "1"
 
 if __package__:
     from .config import read_input
@@ -24,6 +30,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--impulse-periods", type=int, default=15)
     parser.add_argument("--impulse-cycles", type=int, default=1, help="Number of repeated deviations by each agent")
+    q_tables = parser.add_mutually_exclusive_group()
+    q_tables.add_argument("--save-q-tables", type=Path, help="Empty directory for per-session trained Q-table archives")
+    q_tables.add_argument("--load-q-tables", type=Path, help="Existing Q-table archive; skips Q-learning and runs post-training analysis")
+    q_tables.add_argument("--resume-q-tables", type=Path, help="Partial Q-table archive; trains only missing session seeds")
     args = parser.parse_args()
     batch, experiments = read_input(args.input)
     for experiment in experiments:
@@ -33,6 +43,9 @@ def main() -> None:
             seed=args.seed,
             impulse_periods=args.impulse_periods,
             impulse_cycles=args.impulse_cycles,
+            save_q_tables=args.save_q_tables,
+            load_q_tables=args.load_q_tables,
+            resume_q_tables=args.resume_q_tables,
         )
         visits = write_training_visit_log(
             args.output_dir / "A_trainingVisits.csv",

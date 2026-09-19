@@ -13,7 +13,16 @@ sys.path.insert(0, str(PACKAGE))
 
 from config import BatchConfig, ExperimentConfig
 from model import BaselineGame
-from reporting import write_eqm_input, write_eqm_plot, write_figure4_input, write_state_visit_log, write_training_visit_log
+from reporting import (
+    write_eqm_input,
+    write_eqm_plot,
+    write_figure4_input,
+    write_impulse_response_csv,
+    write_impulse_response_plot,
+    write_impulse_response_plots,
+    write_state_visit_log,
+    write_training_visit_log,
+)
 from simulation import run_experiment
 
 
@@ -41,6 +50,9 @@ def test_small_baseline_run_writes_figure4_columns(tmp_path: Path) -> None:
     )
     equilibrium_data = write_eqm_input(tmp_path, summary, impulse_cycles=2)
     equilibrium_plot = write_eqm_plot(equilibrium_data)
+    impulse_data = write_impulse_response_csv(tmp_path / "impulse.csv", summary, 1.47293, 1.92498)
+    impulse_plot = write_impulse_response_plot(impulse_data, "Impulse response", tmp_path / "impulse.pdf")
+    impulse_pdf, impulse_png = write_impulse_response_plots(impulse_data, "Impulse response", tmp_path / "impulse_both")
     header, values = output.read_text(encoding="utf-8").splitlines()
     assert len(sessions) == 3
     assert "AggrDevPriceShockPer030" in header
@@ -53,6 +65,9 @@ def test_small_baseline_run_writes_figure4_columns(tmp_path: Path) -> None:
     assert equilibrium_data.name == "2_eqm.csv"
     assert equilibrium_plot.name == "2_eqm.png"
     assert equilibrium_plot.exists()
+    assert impulse_plot.exists()
+    assert impulse_pdf.exists()
+    assert impulse_png.exists()
 
 
 def test_two_period_memory_encodes_and_logs_four_price_state(tmp_path: Path) -> None:
@@ -75,9 +90,26 @@ def test_two_period_memory_encodes_and_logs_four_price_state(tmp_path: Path) -> 
     assert game.state_from_index(game.state_index(state)) == state
     assert game.next_state(state, np.array([2, 1])) == (2, 1, 0, 1)
 
-    _, sessions, summary = run_experiment(batch, experiment, seed=3, impulse_periods=2)
+    archive = tmp_path / "q_tables"
+    _, sessions, summary = run_experiment(
+        batch, experiment, seed=3, impulse_periods=2, save_q_tables=archive
+    )
+    _, loaded_sessions, loaded_summary = run_experiment(
+        batch, experiment, impulse_periods=2, load_q_tables=archive
+    )
+    (archive / "session_0000.npz").unlink()
+    _, resumed_sessions, resumed_summary = run_experiment(
+        batch, experiment, seed=3, impulse_periods=2, resume_q_tables=archive
+    )
     output = write_state_visit_log(
         tmp_path / "A_trainingStateVisits.csv", summary["StateVisits"], num_agents=2, num_prices=3, memory=2
     )
     assert sum(result.state_visits.sum() for result in sessions) == sum(result.iterations for result in sessions)
     assert len(output.read_text(encoding="utf-8").splitlines()) == 3**4 + 1
+    assert (archive / "manifest.json").exists()
+    assert (archive / "session_0000.npz").exists()
+    assert loaded_sessions[0].state == sessions[0].state
+    assert np.array_equal(loaded_sessions[0].policy, sessions[0].policy)
+    assert np.allclose(loaded_summary["AggrDevPriceShock"], summary["AggrDevPriceShock"])
+    assert np.array_equal(resumed_sessions[0].policy, sessions[0].policy)
+    assert np.allclose(resumed_summary["AggrDevPriceShock"], summary["AggrDevPriceShock"])

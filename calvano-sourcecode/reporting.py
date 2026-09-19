@@ -26,6 +26,103 @@ def write_figure4_input(path: str | Path, summary: dict[str, np.ndarray | float]
     return target
 
 
+def impulse_y_limits(
+    summary: dict[str, np.ndarray | float],
+    nash_price: float,
+    monopoly_price: float,
+) -> tuple[float, float]:
+    """Return the Figure 4 range, including both equilibrium reference prices."""
+    deviator_prices = np.asarray(summary["AggrDevPriceShock"], dtype=float)
+    rival_prices = np.asarray(summary["AggrNonDevPriceShock"], dtype=float)
+    lower = min(float(deviator_prices.min()), float(rival_prices.min()), nash_price)
+    upper = max(float(deviator_prices.max()), float(rival_prices.max()), monopoly_price)
+    # A small margin keeps equilibrium reference lines visible instead of
+    # clipping them against the plot boundary.
+    margin = max((upper - lower) * 0.02, 1e-6)
+    return lower - margin, upper + margin
+
+
+def write_impulse_response_csv(
+    path: str | Path,
+    summary: dict[str, np.ndarray | float],
+    nash_price: float,
+    monopoly_price: float,
+) -> Path:
+    """Write the complete impulse-response path so it can be re-plotted later."""
+    deviator_prices = np.asarray(summary["AggrDevPriceShock"], dtype=float)
+    rival_prices = np.asarray(summary["AggrNonDevPriceShock"], dtype=float)
+    if len(deviator_prices) != len(rival_prices):
+        raise ValueError("Impulse-response series must have equal lengths")
+    y_min, y_max = impulse_y_limits(summary, nash_price, monopoly_price)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["period", "deviator_price", "rival_price", "nash_price", "monopoly_price", "y_min", "y_max"])
+        writer.writerow([0, f"{float(summary['AggrPricePre']):.7f}", f"{float(summary['AggrPricePre']):.7f}", f"{nash_price:.7f}", f"{monopoly_price:.7f}", f"{y_min:.7f}", f"{y_max:.7f}"])
+        for period, (deviator_price, rival_price) in enumerate(zip(deviator_prices, rival_prices), start=1):
+            writer.writerow([period, f"{deviator_price:.7f}", f"{rival_price:.7f}", f"{nash_price:.7f}", f"{monopoly_price:.7f}", f"{y_min:.7f}", f"{y_max:.7f}"])
+    return target
+
+
+def write_impulse_response_plot(
+    path: str | Path,
+    title: str,
+    output_path: str | Path,
+    *,
+    show_legend: bool = True,
+) -> Path:
+    """Render a Figure 4-style impulse response from its CSV data."""
+    source = Path(path)
+    with source.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    if not rows:
+        raise ValueError(f"{source} contains no impulse-response observations")
+    periods = np.asarray([int(row["period"]) for row in rows])
+    deviator_prices = np.asarray([float(row["deviator_price"]) for row in rows])
+    rival_prices = np.asarray([float(row["rival_price"]) for row in rows])
+    nash_price = float(rows[0]["nash_price"])
+    monopoly_price = float(rows[0]["monopoly_price"])
+    y_min, y_max = float(rows[0]["y_min"]), float(rows[0]["y_max"])
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    figure, axis = plt.subplots(figsize=(8, 4))
+    axis.plot(periods, deviator_prices, color="black", marker="o", markersize=3.5, linewidth=1.8, label="Deviating agent")
+    axis.plot(periods, rival_prices, color="gray", marker="^", markersize=3.8, linewidth=1.8, linestyle="--", label="Non-deviating agent")
+    axis.axhline(nash_price, color="dimgray", linestyle=":", linewidth=1.0, label="Nash equilibrium")
+    axis.axhline(monopoly_price, color="dimgray", linestyle=(0, (4, 2)), linewidth=1.0, label="Monopoly price")
+    axis.set_title(title, fontsize=10)
+    axis.set_xlabel("Time")
+    axis.set_ylabel("Price")
+    axis.set_ylim(y_min, y_max)
+    ticks = sorted(set([0, 1, *range(5, int(periods.max()) + 1, 5), int(periods.max())]))
+    axis.set_xticks(ticks)
+    axis.grid(axis="y", color="0.9", linewidth=0.8)
+    if show_legend:
+        axis.legend(loc="best", fontsize=7)
+    figure.tight_layout()
+    figure.savefig(target, dpi=180)
+    plt.close(figure)
+    return target
+
+
+def write_impulse_response_plots(
+    path: str | Path,
+    title: str,
+    output_stem: str | Path,
+    *,
+    show_legend: bool = True,
+) -> tuple[Path, Path]:
+    """Write matching PDF and PNG impulse-response charts from one CSV."""
+    stem = Path(output_stem)
+    if stem.suffix:
+        stem = stem.with_suffix("")
+    pdf = write_impulse_response_plot(path, title, stem.with_suffix(".pdf"), show_legend=show_legend)
+    png = write_impulse_response_plot(path, title, stem.with_suffix(".png"), show_legend=show_legend)
+    return pdf, png
+
+
 def write_eqm_input(
     path: str | Path,
     summary: dict[str, np.ndarray | float],
@@ -79,6 +176,9 @@ def write_eqm_plot(
     plot_style: str = "lines",
     y_limits: tuple[float, float] | None = None,
     output_path: str | Path | None = None,
+    title: str | None = None,
+    reference_prices: tuple[float, float] | None = None,
+    show_legend: bool = False,
 ) -> Path:
     """Render an equilibrium PNG from a CSV written by :func:`write_eqm_input`.
 
@@ -105,18 +205,26 @@ def write_eqm_plot(
         if y_min >= y_max:
             raise ValueError("y_limits must have a lower bound below its upper bound")
 
-    figure, axis = plt.subplots(figsize=(6, 4))
+    figure, axis = plt.subplots(figsize=(8, 4))
     if plot_style == "lines":
-        axis.plot(time, deviator_points, color="black", linewidth=1.5)
-        axis.plot(time, rival_points, color="gray", linewidth=1.5, linestyle="--")
+        axis.plot(time, deviator_points, color="black", linewidth=1.5, label="Deviating agent")
+        axis.plot(time, rival_points, color="gray", linewidth=1.5, linestyle="--", label="Non-deviating agent")
     else:
         axis.scatter(time, deviator_points, color="black", marker="o", s=34)
         axis.scatter(time, rival_points, color="gray", marker="^", s=38)
+    if reference_prices is not None:
+        nash_price, monopoly_price = reference_prices
+        axis.axhline(nash_price, color="dimgray", linestyle=":", linewidth=1.0, label="Nash equilibrium")
+        axis.axhline(monopoly_price, color="dimgray", linestyle=(0, (4, 2)), linewidth=1.0, label="Monopoly price")
+    if title is not None:
+        axis.set_title(title, fontsize=10)
     axis.set_xlabel("Deviation cycle")
     axis.set_ylabel("Price")
     axis.set_xticks(np.arange(0, time.max() + 1, tick_interval))
     axis.set_ylim(y_min, y_max)
     axis.grid(axis="y", color="0.9", linewidth=0.8)
+    if show_legend:
+        axis.legend(loc="best", fontsize=7)
     figure.tight_layout()
     figure.savefig(target, dpi=180)
     plt.close(figure)

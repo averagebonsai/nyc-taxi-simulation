@@ -59,17 +59,25 @@ class BaselineGame:
         return (prices - costs) * demand
 
     def action_index(self, action: np.ndarray) -> int:
+        if self.batch.num_agents == 2:
+            # ``itertools.product`` orders the action matrix exactly like this
+            # base-N encoding; avoiding a tuple/dict lookup is material in the
+            # inner training loop.
+            return int(action[0]) * self.batch.num_prices + int(action[1])
         return self.action_to_index[tuple(int(value) for value in action)]
 
     def state_index(self, state: tuple[int, ...]) -> int:
         """Encode the newest-to-oldest joint actions as a base-price integer."""
-        if len(state) != self.state_width:
-            raise ValueError(f"State has {len(state)} values; expected {self.state_width}")
+        price_count = self.batch.num_prices
+        if self.state_width == 0:
+            return 0
+        if self.state_width == 2:
+            return state[0] * price_count + state[1]
+        if self.state_width == 4:
+            return ((state[0] * price_count + state[1]) * price_count + state[2]) * price_count + state[3]
         index = 0
         for value in state:
-            if value < 0 or value >= self.batch.num_prices:
-                raise ValueError(f"State price index {value} is outside the action grid")
-            index = index * self.batch.num_prices + value
+            index = index * price_count + value
         return index
 
     def state_from_index(self, index: int) -> tuple[int, ...]:
