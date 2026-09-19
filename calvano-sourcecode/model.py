@@ -62,12 +62,28 @@ class BaselineGame:
         return self.action_to_index[tuple(int(value) for value in action)]
 
     def state_index(self, state: tuple[int, ...]) -> int:
+        """Encode the newest-to-oldest joint actions as a base-price integer."""
+        if len(state) != self.state_width:
+            raise ValueError(f"State has {len(state)} values; expected {self.state_width}")
         index = 0
         for value in state:
+            if value < 0 or value >= self.batch.num_prices:
+                raise ValueError(f"State price index {value} is outside the action grid")
             index = index * self.batch.num_prices + value
         return index
 
+    def state_from_index(self, index: int) -> tuple[int, ...]:
+        """Decode a state index into newest-to-oldest joint-action prices."""
+        if index < 0 or index >= self.num_states:
+            raise ValueError(f"State index {index} is outside the state space")
+        values = [0] * self.state_width
+        for position in range(self.state_width - 1, -1, -1):
+            values[position] = index % self.batch.num_prices
+            index //= self.batch.num_prices
+        return tuple(values)
+
     def next_state(self, state: tuple[int, ...], action: np.ndarray) -> tuple[int, ...]:
+        """Prepend this period's joint action and discard the oldest history."""
         if not self.batch.memory:
             return ()
         return tuple(int(value) for value in action) + state[: self.state_width - self.batch.num_agents]

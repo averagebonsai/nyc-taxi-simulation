@@ -12,8 +12,8 @@ Performance measurement period length:
 4																											
 Number of Agents:																											
 2																											
-Memory:																											
-1																											
+Memory:
+2
 Number of Prices:																											
 15																											
 Type of Exploration Mechanism (1 = exponentially decreasing epsilon (beta); 2 = Boltzmann)																								

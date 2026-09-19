@@ -22,6 +22,8 @@ class SessionResult:
     state: tuple[int, ...]
     converged: bool
     iterations: int
+    joint_action_visits: np.ndarray
+    state_visits: np.ndarray
 
 
 def _argmax_random(values: np.ndarray, rng: np.random.Generator) -> int:
@@ -75,10 +77,14 @@ def run_session(game: BaselineGame, seed: int) -> SessionResult:
     epsilon = np.ones(batch.num_agents) if batch.exploration_type == 1 else np.full(batch.num_agents, 1_000.0)
     decay = np.exp(-experiment.exploration_m / batch.iterations_per_episode) if batch.exploration_type == 1 else 1.0 - 0.1**experiment.exploration_m
     stable = 0
+    joint_action_visits = np.zeros((batch.num_prices,) * batch.num_agents, dtype=np.int64)
+    state_visits = np.zeros(game.num_states, dtype=np.int64)
     for iteration in range(1, batch.max_iterations + 1):
         state_index = game.state_index(state)
         action = _choose_action(game, policy, q, state_index, epsilon, rng)
         action_index = game.action_index(action)
+        state_visits[state_index] += 1
+        joint_action_visits[tuple(action)] += 1
         next_state = game.next_state(state, action)
         next_state_index = game.state_index(next_state)
         unchanged = True
@@ -91,10 +97,10 @@ def run_session(game: BaselineGame, seed: int) -> SessionResult:
             unchanged = unchanged and old_action == policy[state_index, agent]
         stable = stable + 1 if unchanged else 1
         if stable >= batch.stability_iterations:
-            return SessionResult(policy, state, True, iteration)
+            return SessionResult(policy, state, True, iteration, joint_action_visits, state_visits)
         state = next_state
         epsilon *= decay
-    return SessionResult(policy, state, False, batch.max_iterations)
+    return SessionResult(policy, state, False, batch.max_iterations, joint_action_visits, state_visits)
 
 
 def _cycle(game: BaselineGame, result: SessionResult) -> list[tuple[int, ...]]:
@@ -106,8 +112,23 @@ def _cycle(game: BaselineGame, result: SessionResult) -> list[tuple[int, ...]]:
     return path[seen[state] :]
 
 
-def impulse_response(game: BaselineGame, result: SessionResult, periods: int = 15) -> tuple[np.ndarray, np.ndarray, float]:
-    """Compute unilateral static-best-response paths, averaging agents and cycle states."""
+def impulse_response(
+    game: BaselineGame,
+    result: SessionResult,
+    periods: int = 15,
+    cycles: int = 1,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Compute repeated unilateral static-best-response impulse-response paths.
+
+    For each cycle, one fixed deviator is forced to its static best-response
+    price in the first period. Both agents then follow their learned policies for
+    the remaining ``periods - 1`` periods before the same deviator is shocked
+    again. ``cycles=1`` reproduces the original one-deviation analysis.
+    """
+    if periods < 1:
+        raise ValueError("periods must be at least 1")
+    if cycles < 1:
+        raise ValueError("cycles must be at least 1")
     dev_prices: list[np.ndarray] = []
     non_dev_prices: list[np.ndarray] = []
     pre_prices: list[float] = []
@@ -115,28 +136,37 @@ def impulse_response(game: BaselineGame, result: SessionResult, periods: int = 1
         for initial_state in _cycle(game, result):
             state = initial_state
             baseline_action = result.policy[game.state_index(state)].copy()
-            candidate_profit = []
-            for price in range(game.batch.num_prices):
-                candidate = baseline_action.copy()
-                candidate[deviator] = price
-                candidate_profit.append(game.profits[game.action_index(candidate), deviator])
-            action = baseline_action.copy()
-            action[deviator] = int(np.argmax(candidate_profit))
             deviator_path, rival_path = [], []
-            for period in range(periods):
-                if period:
-                    action = result.policy[game.state_index(state)].copy()
-                prices = game.grids[action, np.arange(game.batch.num_agents)]
-                deviator_path.append(prices[deviator])
-                rival_path.append(np.delete(prices, deviator).mean())
-                state = game.next_state(state, action)
+            for _ in range(cycles):
+                learned_action = result.policy[game.state_index(state)].copy()
+                candidate_profit = []
+                for price in range(game.batch.num_prices):
+                    candidate = learned_action.copy()
+                    candidate[deviator] = price
+                    candidate_profit.append(game.profits[game.action_index(candidate), deviator])
+                action = learned_action.copy()
+                action[deviator] = int(np.argmax(candidate_profit))
+                for period in range(periods):
+                    if period:
+                        action = result.policy[game.state_index(state)].copy()
+                    prices = game.grids[action, np.arange(game.batch.num_agents)]
+                    deviator_path.append(prices[deviator])
+                    rival_path.append(np.delete(prices, deviator).mean())
+                    state = game.next_state(state, action)
             pre_prices.append(game.grids[baseline_action, np.arange(game.batch.num_agents)].mean())
             dev_prices.append(np.asarray(deviator_path))
             non_dev_prices.append(np.asarray(rival_path))
     return np.mean(dev_prices, axis=0), np.mean(non_dev_prices, axis=0), float(np.mean(pre_prices))
 
 
-def run_experiment(batch: BatchConfig, experiment: ExperimentConfig, *, seed: int = 1, impulse_periods: int = 15) -> tuple[BaselineGame, list[SessionResult], dict[str, np.ndarray | float]]:
+def run_experiment(
+    batch: BatchConfig,
+    experiment: ExperimentConfig,
+    *,
+    seed: int = 1,
+    impulse_periods: int = 15,
+    impulse_cycles: int = 1,
+) -> tuple[BaselineGame, list[SessionResult], dict[str, np.ndarray | float]]:
     """Run all sessions and aggregate the Figure 4 impulse-response series."""
     game = BaselineGame(batch, experiment)
     workers = min(batch.num_cores, batch.num_sessions, os.cpu_count() or 1)
@@ -147,11 +177,13 @@ def run_experiment(batch: BatchConfig, experiment: ExperimentConfig, *, seed: in
         with ProcessPoolExecutor(max_workers=workers) as executor:
             results = list(executor.map(_run_session_worker, [(game, session_seed) for session_seed in session_seeds]))
     eligible = [result for result in results if result.converged] or results
-    responses = [impulse_response(game, result, impulse_periods) for result in eligible]
+    responses = [impulse_response(game, result, impulse_periods, impulse_cycles) for result in eligible]
     return game, results, {
         "AggrPricePre": float(np.mean([response[2] for response in responses])),
         "AggrDevPriceShock": np.mean([response[0] for response in responses], axis=0),
         "AggrNonDevPriceShock": np.mean([response[1] for response in responses], axis=0),
+        "JointActionVisits": np.sum([result.joint_action_visits for result in results], axis=0),
+        "StateVisits": np.sum([result.state_visits for result in results], axis=0),
     }
 
 
