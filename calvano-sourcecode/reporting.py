@@ -31,15 +31,15 @@ def impulse_y_limits(
     nash_price: float,
     monopoly_price: float,
 ) -> tuple[float, float]:
-    """Return the Figure 4 range, including both equilibrium reference prices."""
+    """Return a readable range including prices and the 1.5--2.5 chart window."""
     deviator_prices = np.asarray(summary["AggrDevPriceShock"], dtype=float)
     rival_prices = np.asarray(summary["AggrNonDevPriceShock"], dtype=float)
     lower = min(float(deviator_prices.min()), float(rival_prices.min()), nash_price)
     upper = max(float(deviator_prices.max()), float(rival_prices.max()), monopoly_price)
-    # A small margin keeps equilibrium reference lines visible instead of
-    # clipping them against the plot boundary.
+    # Use the requested NYC plotting window while still expanding it if a
+    # future experiment produces values outside that range.
     margin = max((upper - lower) * 0.02, 1e-6)
-    return lower - margin, upper + margin
+    return min(1.5, lower - margin), max(2.5, upper + margin)
 
 
 def write_impulse_response_csv(
@@ -150,7 +150,10 @@ def write_eqm_input(
     rival_points = np.concatenate(([pre_deviation_price], rival_prices[cycle_end_indices]))
 
     output_directory = Path(path)
-    if output_directory.suffix:
+    # A results directory can legitimately contain dots (for example,
+    # ``beta-0.0025``).  Only an existing regular file denotes a file path;
+    # otherwise this API treats ``path`` as the output directory.
+    if output_directory.exists() and output_directory.is_file():
         output_directory = output_directory.parent
     output_directory.mkdir(parents=True, exist_ok=True)
     stem = f"{impulse_cycles}_eqm"
@@ -158,10 +161,10 @@ def write_eqm_input(
         stem += f"_{periods_per_cycle}_periods"
     target = output_directory / f"{stem}.csv"
 
-    # These match figure_4.R: retain the original reference prices while also
-    # accommodating an impulse response that extends beyond those references.
-    y_min = min(float(deviator_prices.min()), float(rival_prices.min()), 1.47293)
-    y_max = max(float(deviator_prices.max()), float(rival_prices.max()), 1.92498)
+    # Preserve the requested NYC plotting window while avoiding clipped values
+    # if a later response lies beyond it.
+    y_min = min(float(deviator_prices.min()), float(rival_prices.min()), 1.5)
+    y_max = max(float(deviator_prices.max()), float(rival_prices.max()), 2.5)
     with target.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow(["cycle", "deviator_price", "rival_price", "y_min", "y_max"])
@@ -237,6 +240,7 @@ def write_training_visit_log(
     state_visits: np.ndarray,
     *,
     memory: int = 1,
+    state_representation: str = "joint",
 ) -> Path:
     """Write aggregate counts for each joint action.
 
@@ -250,20 +254,20 @@ def write_training_visit_log(
         raise ValueError("The training visit log requires two agents")
     if memory < 0:
         raise ValueError("The training visit log cannot use negative memory")
-    if memory == 1 and state_counts.size != action_counts.size:
+    if memory == 1 and state_representation == "joint" and state_counts.size != action_counts.size:
         raise ValueError("One-period state visits must have one entry per joint action")
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         header = ["agent_1_price_index", "agent_2_price_index", "joint_action_visits"]
-        if memory == 1:
+        if memory == 1 and state_representation == "joint":
             header.append("state_visits")
         writer.writerow(header)
         for first_price in range(action_counts.shape[0]):
             for second_price in range(action_counts.shape[1]):
                 row: list[int] = [first_price + 1, second_price + 1, int(action_counts[first_price, second_price])]
-                if memory == 1:
+                if memory == 1 and state_representation == "joint":
                     state_index = first_price * action_counts.shape[1] + second_price
                     row.append(int(state_counts[state_index]))
                 writer.writerow(row)
@@ -277,6 +281,7 @@ def write_state_visit_log(
     num_agents: int,
     num_prices: int,
     memory: int,
+    state_representation: str = "joint",
 ) -> Path:
     """Write one count for every remembered joint-action state.
 
@@ -286,7 +291,7 @@ def write_state_visit_log(
     if num_agents != 2 or num_prices < 2 or memory < 0:
         raise ValueError("State visit logging currently supports two agents and non-negative memory")
     counts = np.asarray(state_visits, dtype=np.int64)
-    state_width = num_agents * memory
+    state_width = 1 if state_representation == "opponent" else num_agents * memory
     expected_states = num_prices**state_width
     if counts.size != expected_states:
         raise ValueError(f"State visit log has {counts.size} entries; expected {expected_states}")
@@ -297,6 +302,8 @@ def write_state_visit_log(
         for lag in range(1, memory + 1)
         for agent in range(num_agents)
     ]
+    if state_representation == "opponent":
+        columns = ["opponent_previous_price_index"]
     with target.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow([*columns, "state_visits"])
@@ -308,3 +315,54 @@ def write_state_visit_log(
                 remaining //= num_prices
             writer.writerow([*(value + 1 for value in state), int(count)])
     return target
+
+
+def write_state_action_visit_logs(
+    directory: str | Path,
+    session_state_action_visits: list[np.ndarray],
+    *,
+    num_agents: int,
+    num_prices: int,
+    memory: int,
+    state_representation: str = "joint",
+) -> list[Path]:
+    """Write one state-action count CSV per training simulation.
+
+    Each row records the previous joint price state observed by one agent and
+    the action it selected while learning. Rows with zero observations are kept
+    so a two-agent, one-period, ten-price experiment always has 2,000 rows per
+    session.
+    """
+    if num_agents != 2 or memory != 1 or state_representation != "joint":
+        raise ValueError("State-action logging currently supports two agents with one-period joint-state memory")
+    target_directory = Path(directory)
+    target_directory.mkdir(parents=True, exist_ok=True)
+    expected_shape = (num_agents, num_prices**num_agents, num_prices)
+    outputs: list[Path] = []
+    for session, raw_counts in enumerate(session_state_action_visits):
+        counts = np.asarray(raw_counts, dtype=np.int64)
+        if counts.shape != expected_shape:
+            raise ValueError(f"Session {session} state-action counts have shape {counts.shape}; expected {expected_shape}")
+        target = target_directory / f"session_{session:04d}.csv"
+        with target.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.writer(stream)
+            writer.writerow([
+                "agent_num",
+                "agent_1_price_index",
+                "agent_2_price_index",
+                "chosen_action",
+                "count",
+            ])
+            for agent in range(num_agents):
+                for state_index in range(num_prices**num_agents):
+                    first_price, second_price = divmod(state_index, num_prices)
+                    for action in range(num_prices):
+                        writer.writerow([
+                            agent + 1,
+                            first_price + 1,
+                            second_price + 1,
+                            action + 1,
+                            int(counts[agent, state_index, action]),
+                        ])
+        outputs.append(target)
+    return outputs

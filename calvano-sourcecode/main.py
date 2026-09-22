@@ -13,13 +13,13 @@ for _thread_variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THR
 
 if __package__:
     from .config import read_input
-    from .reporting import write_eqm_input, write_eqm_plot, write_figure4_input, write_state_visit_log, write_training_visit_log
+    from .reporting import write_eqm_input, write_eqm_plot, write_figure4_input, write_state_action_visit_logs, write_state_visit_log, write_training_visit_log
     from .simulation import run_experiment
 else:  # Supports `python calvano-sourcecode/main.py` despite the requested hyphenated folder name.
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
     from config import read_input
-    from reporting import write_eqm_input, write_eqm_plot, write_figure4_input, write_state_visit_log, write_training_visit_log
+    from reporting import write_eqm_input, write_eqm_plot, write_figure4_input, write_state_action_visit_logs, write_state_visit_log, write_training_visit_log
     from simulation import run_experiment
 
 
@@ -30,6 +30,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--impulse-periods", type=int, default=15)
     parser.add_argument("--impulse-cycles", type=int, default=1, help="Number of repeated deviations by each agent")
+    parser.add_argument("--deviation-periods", type=int, default=1, help="Static-best-response periods at the start of each cycle")
     q_tables = parser.add_mutually_exclusive_group()
     q_tables.add_argument("--save-q-tables", type=Path, help="Empty directory for per-session trained Q-table archives")
     q_tables.add_argument("--load-q-tables", type=Path, help="Existing Q-table archive; skips Q-learning and runs post-training analysis")
@@ -43,6 +44,7 @@ def main() -> None:
             seed=args.seed,
             impulse_periods=args.impulse_periods,
             impulse_cycles=args.impulse_cycles,
+            deviation_periods=args.deviation_periods,
             save_q_tables=args.save_q_tables,
             load_q_tables=args.load_q_tables,
             resume_q_tables=args.resume_q_tables,
@@ -60,13 +62,21 @@ def main() -> None:
             num_prices=batch.num_prices,
             memory=batch.memory,
         )
+        state_action_visits = write_state_action_visit_logs(
+            args.output_dir / "A_trainingStateActionVisits",
+            [session.state_action_visits for session in sessions],
+            num_agents=batch.num_agents,
+            num_prices=batch.num_prices,
+            memory=batch.memory,
+            state_representation=batch.state_representation,
+        )
         equilibrium_data = write_eqm_input(args.output_dir, summary, args.impulse_cycles)
         equilibrium_plot = write_eqm_plot(equilibrium_data)
         if batch.impulse_response_to_br:
             output = write_figure4_input(args.output_dir / "A_irToBR.txt", summary)
             print(
                 f"experiment {experiment.identifier}: {sum(item.converged for item in sessions)}/{len(sessions)} "
-                f"sessions converged; wrote {output}, {visits}, {state_visits}, {equilibrium_data}, and {equilibrium_plot}"
+                f"sessions converged; wrote {output}, {visits}, {state_visits}, {len(state_action_visits)} state-action logs, {equilibrium_data}, and {equilibrium_plot}"
             )
 
 

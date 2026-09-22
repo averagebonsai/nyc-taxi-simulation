@@ -35,6 +35,7 @@ class SessionResult:
     iterations: int
     joint_action_visits: np.ndarray
     state_visits: np.ndarray
+    state_action_visits: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ def _archive_metadata(game: BaselineGame, session_count: int, base_seed: int) ->
         "num_agents": game.batch.num_agents,
         "num_prices": game.batch.num_prices,
         "memory": game.batch.memory,
+        "state_representation": game.batch.state_representation,
         "num_states": game.num_states,
         "price_grids": game.grids.tolist(),
         "training_parameters": {
@@ -108,6 +110,7 @@ def _save_session_q_table(path: Path, q: np.ndarray, result: SessionResult, seed
         iterations=np.asarray(result.iterations, dtype=np.int64),
         joint_action_visits=result.joint_action_visits,
         state_visits=result.state_visits,
+        state_action_visits=result.state_action_visits,
     )
     os.replace(temporary, path)
 
@@ -141,6 +144,11 @@ def _load_session_q_table(game: BaselineGame, path: Path, expected_seed: int | N
         iterations = int(archive["iterations"])
         joint_action_visits = archive["joint_action_visits"]
         state_visits = archive["state_visits"]
+        # Archives written before state-action logging retain compatibility for
+        # post-training analysis, but do not contain the requested counts.
+        state_action_visits = archive["state_action_visits"] if "state_action_visits" in archive.files else np.zeros(
+            (game.batch.num_agents, game.num_states, game.batch.num_prices), dtype=np.int64
+        )
     if q.shape != expected_q_shape or not np.isfinite(q).all():
         raise ValueError(f"{path} does not contain a valid Q-table for this configuration")
     if policy.shape != (game.num_states, game.batch.num_agents):
@@ -148,20 +156,22 @@ def _load_session_q_table(game: BaselineGame, path: Path, expected_seed: int | N
     if (
         len(state) != game.state_width
         or any(value < 0 or value >= game.batch.num_prices for value in state)
-        or game.state_index(state) >= game.num_states
+        or any(game.state_index(state, agent) >= game.num_states for agent in range(game.batch.num_agents))
     ):
         raise ValueError(f"{path} does not contain a valid terminal state")
     if joint_action_visits.shape != (game.batch.num_prices,) * game.batch.num_agents:
         raise ValueError(f"{path} does not contain valid joint-action visit counts")
     if state_visits.shape != (game.num_states,):
         raise ValueError(f"{path} does not contain valid state visit counts")
+    if state_action_visits.shape != (game.batch.num_agents, game.num_states, game.batch.num_prices):
+        raise ValueError(f"{path} does not contain valid state-action visit counts")
     if np.any(policy < 0) or np.any(policy >= game.batch.num_prices):
         raise ValueError(f"{path} contains policy actions outside the action grid")
     if seed < 0:
         raise ValueError(f"{path} contains an invalid seed")
     if expected_seed is not None and seed != expected_seed:
         raise ValueError(f"{path} was trained with seed {seed}; expected {expected_seed}")
-    return SessionResult(policy, state, converged, iterations, joint_action_visits, state_visits)
+    return SessionResult(policy, state, converged, iterations, joint_action_visits, state_visits, state_action_visits)
 
 
 def _read_archive_manifest(game: BaselineGame, directory: str | Path) -> tuple[Path, dict[str, object]]:
@@ -173,8 +183,11 @@ def _read_archive_manifest(game: BaselineGame, directory: str | Path) -> tuple[P
         raise ValueError(f"{source} is not a valid Q-table archive") from error
     session_count = int(metadata.get("session_count", 0))
     base_seed = int(metadata.get("base_seed", -1))
+    # Archives written before alternative state representations existed are
+    # joint-state archives.  Preserve their compatibility with this version.
+    metadata.setdefault("state_representation", "joint")
     expected = _archive_metadata(game, session_count, base_seed)
-    for key in ("schema_version", "num_agents", "num_prices", "memory", "num_states", "price_grids", "training_parameters"):
+    for key in ("schema_version", "num_agents", "num_prices", "memory", "state_representation", "num_states", "price_grids", "training_parameters"):
         if metadata.get(key) != expected[key]:
             raise ValueError(f"Q-table archive {source} is incompatible with the current game ({key} differs)")
     if session_count < 1:
@@ -223,16 +236,16 @@ def _initial_q(game: BaselineGame, rng: np.random.Generator) -> tuple[np.ndarray
     return q, policy
 
 
-def _choose_action(game: BaselineGame, policy: np.ndarray, q: np.ndarray, state_index: int, epsilon: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+def _choose_action(game: BaselineGame, policy: np.ndarray, q: np.ndarray, state_index: np.ndarray, epsilon: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     batch = game.batch
     action = np.empty(batch.num_agents, dtype=int)
     if batch.exploration_type == 1:
         for agent in range(batch.num_agents):
-            action[agent] = rng.integers(batch.num_prices) if rng.random() <= epsilon[agent] else policy[state_index, agent]
+            action[agent] = rng.integers(batch.num_prices) if rng.random() <= epsilon[agent] else policy[state_index[agent], agent]
     else:
         for agent in range(batch.num_agents):
             temperature = max(epsilon[agent], np.finfo(float).tiny)
-            values = q[agent, state_index]
+            values = q[agent, state_index[agent]]
             weights = np.exp((values - values.max()) / temperature)
             action[agent] = rng.choice(batch.num_prices, p=weights / weights.sum())
     return action
@@ -249,31 +262,42 @@ def run_session(game: BaselineGame, seed: int, q_archive_path: Path | None = Non
     stable = 0
     joint_action_visits = np.zeros((batch.num_prices,) * batch.num_agents, dtype=np.int64)
     state_visits = np.zeros(game.num_states, dtype=np.int64)
+    state_action_visits = np.zeros((batch.num_agents, game.num_states, batch.num_prices), dtype=np.int64)
     agents = np.arange(batch.num_agents)
     for iteration in range(1, batch.max_iterations + 1):
-        state_index = game.state_index(state)
+        state_index = np.asarray([game.state_index(state, agent) for agent in agents])
         action = _choose_action(game, policy, q, state_index, epsilon, rng)
         action_index = game.action_index(action)
-        state_visits[state_index] += 1
+        if batch.state_representation == "opponent":
+            for index in state_index:
+                state_visits[index] += 1
+        else:
+            state_visits[state_index[0]] += 1
+        for agent in agents:
+            state_action_visits[agent, state_index[agent], action[agent]] += 1
         joint_action_visits[tuple(action)] += 1
         next_state = game.next_state(state, action)
-        next_state_index = game.state_index(next_state)
-        old_actions = policy[state_index].copy()
+        next_state_index = np.asarray([game.state_index(next_state, agent) for agent in agents])
+        old_actions = policy[state_index, agents].copy()
         old_values = q[agents, state_index, action]
-        targets = game.profits[action_index] + experiment.discount * q[:, next_state_index].max(axis=1)
+        # Pair each agent with its own next-state row.  For the usual joint
+        # state these indices happen to match; for opponent-only state they do
+        # not, so ``q[:, next_state_index]`` would form a Cartesian product.
+        next_max = q[agents, next_state_index, :].max(axis=1)
+        targets = game.profits[action_index] + experiment.discount * next_max
         q[agents, state_index, action] = old_values + experiment.alpha * (targets - old_values)
         for agent in range(batch.num_agents):
-            policy[state_index, agent] = _argmax_random(q[agent, state_index], rng)
-        unchanged = bool(np.array_equal(old_actions, policy[state_index]))
+            policy[state_index[agent], agent] = _argmax_random(q[agent, state_index[agent]], rng)
+        unchanged = bool(np.array_equal(old_actions, policy[state_index, agents]))
         stable = stable + 1 if unchanged else 1
         if stable >= batch.stability_iterations:
-            result = SessionResult(policy, state, True, iteration, joint_action_visits, state_visits)
+            result = SessionResult(policy, state, True, iteration, joint_action_visits, state_visits, state_action_visits)
             if q_archive_path is not None:
                 _save_session_q_table(q_archive_path, q, result, seed)
             return result
         state = next_state
         epsilon *= decay
-    result = SessionResult(policy, state, False, batch.max_iterations, joint_action_visits, state_visits)
+    result = SessionResult(policy, state, False, batch.max_iterations, joint_action_visits, state_visits, state_action_visits)
     if q_archive_path is not None:
         _save_session_q_table(q_archive_path, q, result, seed)
     return result
@@ -284,7 +308,7 @@ def _cycle(game: BaselineGame, result: SessionResult) -> list[tuple[int, ...]]:
     while state not in seen:
         seen[state] = len(path)
         path.append(state)
-        state = game.next_state(state, result.policy[game.state_index(state)])
+        state = game.next_state(state, game.policy_action(result.policy, state))
     return path[seen[state] :]
 
 
@@ -293,38 +317,47 @@ def impulse_response(
     result: SessionResult,
     periods: int = 15,
     cycles: int = 1,
+    deviation_grid_steps: int | None = None,
+    deviation_periods: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Compute repeated unilateral static-best-response impulse-response paths.
 
     For each cycle, one fixed deviator is forced to its static best-response
-    price in the first period. Both agents then follow their learned policies for
-    the remaining ``periods - 1`` periods before the same deviator is shocked
-    again. ``cycles=1`` reproduces the original one-deviation analysis.
+    price for ``deviation_periods`` periods. Both agents then follow their
+    learned policies for the remainder of the cycle before the same deviator is
+    shocked again. ``deviation_periods=1`` reproduces the original Figure 4
+    analysis.
     """
     if periods < 1:
         raise ValueError("periods must be at least 1")
     if cycles < 1:
         raise ValueError("cycles must be at least 1")
+    if deviation_periods < 1 or deviation_periods > periods:
+        raise ValueError("deviation_periods must be between 1 and periods")
+    if deviation_grid_steps is not None and deviation_grid_steps < 1:
+        raise ValueError("deviation_grid_steps must be positive")
     dev_prices: list[np.ndarray] = []
     non_dev_prices: list[np.ndarray] = []
     pre_prices: list[float] = []
     for deviator in range(game.batch.num_agents):
         for initial_state in _cycle(game, result):
             state = initial_state
-            baseline_action = result.policy[game.state_index(state)].copy()
+            baseline_action = game.policy_action(result.policy, state)
             deviator_path, rival_path = [], []
             for _ in range(cycles):
-                learned_action = result.policy[game.state_index(state)].copy()
-                candidate_profit = []
-                for price in range(game.batch.num_prices):
-                    candidate = learned_action.copy()
-                    candidate[deviator] = price
-                    candidate_profit.append(game.profits[game.action_index(candidate), deviator])
-                action = learned_action.copy()
-                action[deviator] = int(np.argmax(candidate_profit))
                 for period in range(periods):
-                    if period:
-                        action = result.policy[game.state_index(state)].copy()
+                    learned_action = game.policy_action(result.policy, state)
+                    action = learned_action.copy()
+                    if period < deviation_periods:
+                        if deviation_grid_steps is None:
+                            candidate_profit = []
+                            for price in range(game.batch.num_prices):
+                                candidate = learned_action.copy()
+                                candidate[deviator] = price
+                                candidate_profit.append(game.profits[game.action_index(candidate), deviator])
+                            action[deviator] = int(np.argmax(candidate_profit))
+                        else:
+                            action[deviator] = max(0, action[deviator] - deviation_grid_steps)
                     prices = game.grids[action, np.arange(game.batch.num_agents)]
                     deviator_path.append(prices[deviator])
                     rival_path.append(np.delete(prices, deviator).mean())
@@ -345,6 +378,8 @@ def run_experiment(
     save_q_tables: str | Path | None = None,
     load_q_tables: str | Path | None = None,
     resume_q_tables: str | Path | None = None,
+    deviation_grid_steps: int | None = None,
+    deviation_periods: int = 1,
 ) -> tuple[BaselineGame, list[SessionResult], dict[str, np.ndarray | float]]:
     """Train or reload all sessions, then aggregate the impulse-response series."""
     archive_modes = sum(value is not None for value in (save_q_tables, load_q_tables, resume_q_tables))
@@ -392,13 +427,24 @@ def run_experiment(
             completed[session] = outcome
         results = [completed[session] for session in range(batch.num_sessions)]
     eligible = [result for result in results if result.converged] or results
-    responses = [impulse_response(game, result, impulse_periods, impulse_cycles) for result in eligible]
+    responses = [
+        impulse_response(
+            game,
+            result,
+            impulse_periods,
+            impulse_cycles,
+            deviation_grid_steps,
+            deviation_periods,
+        )
+        for result in eligible
+    ]
     return game, results, {
         "AggrPricePre": float(np.mean([response[2] for response in responses])),
         "AggrDevPriceShock": np.mean([response[0] for response in responses], axis=0),
         "AggrNonDevPriceShock": np.mean([response[1] for response in responses], axis=0),
         "JointActionVisits": np.sum([result.joint_action_visits for result in results], axis=0),
         "StateVisits": np.sum([result.state_visits for result in results], axis=0),
+        "StateActionVisits": np.sum([result.state_action_visits for result in results], axis=0),
     }
 
 

@@ -20,7 +20,12 @@ class BaselineGame:
         self.actions = np.asarray(list(product(range(batch.num_prices), repeat=batch.num_agents)), dtype=int)
         self.action_to_index = {tuple(action): index for index, action in enumerate(self.actions)}
         self.state_width = batch.num_agents * batch.memory
-        self.num_states = batch.num_prices**self.state_width if batch.memory else 1
+        if batch.state_representation == "opponent":
+            if batch.num_agents != 2 or batch.memory != 1:
+                raise ValueError("Opponent-only state representation requires two agents and one period of memory")
+            self.num_states = batch.num_prices
+        else:
+            self.num_states = batch.num_prices**self.state_width if batch.memory else 1
         self.grids = self._price_grids()
         self.profits = self._payoff_matrix()
 
@@ -66,8 +71,12 @@ class BaselineGame:
             return int(action[0]) * self.batch.num_prices + int(action[1])
         return self.action_to_index[tuple(int(value) for value in action)]
 
-    def state_index(self, state: tuple[int, ...]) -> int:
+    def state_index(self, state: tuple[int, ...], agent: int | None = None) -> int:
         """Encode the newest-to-oldest joint actions as a base-price integer."""
+        if self.batch.state_representation == "opponent":
+            if agent is None:
+                raise ValueError("Opponent-only states require an agent index")
+            return state[1 - agent]
         price_count = self.batch.num_prices
         if self.state_width == 0:
             return 0
@@ -95,3 +104,9 @@ class BaselineGame:
         if not self.batch.memory:
             return ()
         return tuple(int(value) for value in action) + state[: self.state_width - self.batch.num_agents]
+
+    def policy_action(self, policy: np.ndarray, state: tuple[int, ...]) -> np.ndarray:
+        """Return each agent's learned action for its available state information."""
+        if self.batch.state_representation == "opponent":
+            return np.asarray([policy[self.state_index(state, agent), agent] for agent in range(self.batch.num_agents)])
+        return policy[self.state_index(state)].copy()

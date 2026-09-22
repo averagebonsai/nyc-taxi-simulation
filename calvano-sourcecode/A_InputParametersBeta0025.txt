@@ -1,0 +1,38 @@
+Number of experiments:
+1 1
+Number of cores
+8
+Number of sessions
+50
+Iterations per episode
+1000
+Maximum number of episodes
+2000
+Performance measurement period length:
+4
+Number of Agents:
+2
+Memory:
+1
+Number of Prices:
+10
+Type of Exploration Mechanism
+1
+Type of Payoff Input
+2
+Compute impulse response to static best response
+1
+Compute impulse response to Nash
+0
+Compute impulse response to all prices
+0
+Compute equilibrium check
+0
+Compute Q gap
+0
+Compute learning trajectory
+0 0
+Compute detailed analysis
+0
+Model PrintQ Alpha1 Alpha2 Beta_1 Beta_2 Delta a0 a1 a2 c1 c2 sigma extend1 extend2 NashP1 NashP2 CoopP1 CoopP2 typeQ1 par1Q1 par2Q1 typeQ2 par1Q2 par2Q2
+1 0 0.15 0.15 0.0025 0.0025 0.95 0 2 2 1 1 0.25 0.1 0.1 1.47293 1.47293 1.92498 1.92498 O 0 0 O 0 0

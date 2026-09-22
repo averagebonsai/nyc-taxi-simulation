@@ -1,7 +1,7 @@
 Number of experiments:																											
 1	1																										
 Number of cores																											
-8																											
+5																											
 Number of sessions																											
 50																											
 Iterations per episode																											
@@ -15,7 +15,7 @@ Number of Agents:
 Memory:
 1
 Number of Prices:																											
-10
+10 
 
 Type of Exploration Mechanism (1 = exponentially decreasing epsilon (beta); 2 = Boltzmann)																								
 1																								
@@ -36,4 +36,4 @@ Compute Learning Trajectory (X1 = 0 : NO; X1 > 0 : number of checkpoints; X2 > 0
 Compute Detailed Analysis (0 = No; 1 = Yes)																											
 0																											
 Model	PrintQ	Alpha1	Alpha2	Beta_1	Beta_2	Delta	a0	a1	a2	c1	c2	sigma	extend1	extend2	NashP1	NashP2	CoopP1	CoopP2	typeQ1	par1Q1	par2Q1	typeQ2	par1Q2	par2Q2
-1	0	0.15	0.15	0.004	0.004	0.95	0	2	2	1	1	0.25	0.1	0.1	1.47293	1.47293	1.92498	1.92498	O	0	0	O	0	0
+1	0	0.15	0.15	0.004	0.004	0.95	0.0593	1	1	0.75	0.75	1.1210	0.1	0.1	2.1546	2.1546	2.4528	2.4528	O	0	0	O	0	0

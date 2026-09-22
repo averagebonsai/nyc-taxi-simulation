@@ -29,6 +29,7 @@ class BatchConfig:
     q_gap_to_maximum: bool
     learning_trajectory: tuple[int, int]
     detailed_analysis: bool
+    state_representation: str = "joint"
 
     @property
     def max_iterations(self) -> int:
